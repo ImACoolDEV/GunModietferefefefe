@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------
--- UNIVERSAL GUNSCRIPT_LOCAL MODIFIER & EXPLOIT BYPASS
+-- GUNSCRIPT_LOCAL LIVE HOOK & ANTI-CHEAT BYPASS
 --------------------------------------------------------------------------------
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -7,53 +7,70 @@ local LocalPlayer = Players.LocalPlayer
 local debug_getupvalues = debug.getupvalues or getupvalues
 local debug_setupvalue = debug.setupvalue or setupvalue
 
--- Apply modified values to target table
-local function applyGunMods(tbl)
+local function applyMods(tbl)
     if type(tbl) ~= "table" then return end
-
-    -- Firing Mechanics
     tbl.FireRate = 0
     tbl.Auto = true
     tbl.BurstFireEnabled = false
-    
-    -- Delays & Charge Bypasses
     tbl.DelayBeforeFiring = 0
     tbl.DelayAfterFiring = 0
     tbl.ChargingTime = 0
     tbl.ChargedShotEnabled = false
     tbl.MinigunEnabled = false
-
-    -- Spread & Camera Recoil
     tbl.Spread = 0
     tbl.SpreadRedution = 0
     tbl.CameraShakingEnabled = false
-
-    -- Ammo Limits
     tbl.LimitedClipEnabled = false
     tbl.AmmoPerClip = 999999
     tbl.MaxClip = 999999
 end
 
--- Locates runtime upvalues inside GunScript_Local
-local function findRuntimeTable(tool, gunScript)
-    if not debug_getupvalues then return nil end
+local function patchWeapon(tool)
+    if not tool or not tool:IsA("Tool") then return end
 
-    -- Method 1: Check connections on Equipped/Unequipped
-    if getconnections then
+    -- 1. Modify Setting Module
+    local settingModule = tool:FindFirstChild("Setting")
+    if settingModule and settingModule:IsA("ModuleScript") then
+        local success, config = pcall(require, settingModule)
+        if success and type(config) == "table" then
+            applyMods(config)
+        end
+    end
+
+    -- 2. Hook SendInfo OnClientEvent
+    local gunServer = tool:FindFirstChild("GunScript_Server")
+    local sendInfo = gunServer and gunServer:FindFirstChild("SendInfo")
+
+    if sendInfo and getconnections then
+        for _, conn in ipairs(getconnections(sendInfo.OnClientEvent)) do
+            local oldFn = conn.Function
+            if oldFn then
+                if debug_getupvalues then
+                    for _, uv in pairs(debug_getupvalues(oldFn)) do
+                        if type(uv) == "table" then applyMods(uv) end
+                    end
+                end
+
+                if hookfunction then
+                    hookfunction(oldFn, function(p1, p2, p3)
+                        if type(p1) == "table" then applyMods(p1) end
+                        return oldFn(p1, p2, p3)
+                    end)
+                end
+            end
+        end
+    end
+
+    -- 3. Neuter VerifyExploit to prevent anti-cheat kicks
+    if getconnections and debug_getupvalues and debug_setupvalue then
         for _, event in ipairs({tool.Equipped, tool.Unequipped}) do
             for _, conn in ipairs(getconnections(event)) do
                 if conn.Function then
-                    local upvals = debug_getupvalues(conn.Function)
-                    for _, uv in pairs(upvals) do
-                        if type(uv) == "table" and uv.AmmoPerClip ~= nil then
-                            return uv
-                        elseif type(uv) == "function" then
-                            local subUpvals = debug_getupvalues(uv)
-                            for _, subUv in pairs(subUpvals) do
-                                if type(subUv) == "table" and subUv.AmmoPerClip ~= nil then
-                                    return subUv
-                                end
-                            end
+                    for idx, uv in pairs(debug_getupvalues(conn.Function)) do
+                        if type(uv) == "function" then
+                            debug_setupvalue(conn.Function, idx, function() end)
+                        elseif type(uv) == "table" then
+                            applyMods(uv)
                         end
                     end
                 end
@@ -61,87 +78,20 @@ local function findRuntimeTable(tool, gunScript)
         end
     end
 
-    -- Method 2: Inspect script environment
-    if getsenv then
-        local success, env = pcall(getsenv, gunScript)
-        if success and env then
-            for _, fn in pairs(env) do
-                if type(fn) == "function" then
-                    local upvals = debug_getupvalues(fn)
-                    for _, uv in pairs(upvals) do
-                        if type(uv) == "table" and uv.AmmoPerClip ~= nil then
-                            return uv
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return nil
+    print("✅ Successfully patched weapon & bypassed anti-cheat:", tool.Name)
 end
 
-local function processGun(tool)
-    if not tool or not tool:IsA("Tool") then return end
-
-    local gunScript = tool:FindFirstChild("GunScript_Local")
-    local settingModule = tool:FindFirstChild("Setting")
-
-    if not gunScript then return end
-
-    print("🔍 Processing weapon:", tool.Name)
-
-    -- 1. Modify the Setting Module
-    local settingTable = nil
-    if settingModule and settingModule:IsA("ModuleScript") then
-        local success, res = pcall(require, settingModule)
-        if success and type(res) == "table" then
-            settingTable = res
-            applyGunMods(settingTable)
-        end
-    end
-
-    -- 2. Modify the active server-sent upvalue (v5)
-    task.spawn(function()
-        local v5Table = nil
-        local attempts = 0
-
-        -- Wait briefly until v5 is populated by SendInfo event
-        repeat
-            task.wait(0.1)
-            v5Table = findRuntimeTable(tool, gunScript)
-            attempts = attempts + 1
-        until v5Table ~= nil or attempts > 30
-
-        if v5Table then
-            applyGunMods(v5Table)
-            print("✅ Successfully modified runtime stats & bypassed anti-cheat for:", tool.Name)
-        else
-            warn("⚠️ Could not reach runtime upvalue for:", tool.Name, "(Setting module updated)")
-        end
-    end)
-end
-
--- Scan containers
 local function scanContainer(container)
     if not container then return end
-    for _, item in ipairs(container:GetChildren()) do
-        processGun(item)
-    end
+    for _, item in ipairs(container:GetChildren()) do patchWeapon(item) end
     container.ChildAdded:Connect(function(child)
         task.wait(0.1)
-        processGun(child)
+        patchWeapon(child)
     end)
 end
 
--- Initialize listeners
-if LocalPlayer:FindFirstChild("Backpack") then
-    scanContainer(LocalPlayer.Backpack)
-end
-
-if LocalPlayer.Character then
-    scanContainer(LocalPlayer.Character)
-end
+if LocalPlayer:FindFirstChild("Backpack") then scanContainer(LocalPlayer.Backpack) end
+if LocalPlayer.Character then scanContainer(LocalPlayer.Character) end
 
 LocalPlayer.CharacterAdded:Connect(function(char)
     scanContainer(char)
