@@ -1,97 +1,150 @@
 --------------------------------------------------------------------------------
--- ACS / GUN KIT AUTOMATIC MODIFIER
+-- UNIVERSAL GUNSCRIPT_LOCAL MODIFIER & EXPLOIT BYPASS
 --------------------------------------------------------------------------------
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- Set to your specific gun name, or "ALL" to modify every gun in inventory
-local TARGET_GUN_NAME = "TaurusJudge" 
+local debug_getupvalues = debug.getupvalues or getupvalues
+local debug_setupvalue = debug.setupvalue or setupvalue
 
-local function modifyGun(tool)
+-- Apply modified values to target table
+local function applyGunMods(tbl)
+    if type(tbl) ~= "table" then return end
+
+    -- Firing Mechanics
+    tbl.FireRate = 0
+    tbl.Auto = true
+    tbl.BurstFireEnabled = false
+    
+    -- Delays & Charge Bypasses
+    tbl.DelayBeforeFiring = 0
+    tbl.DelayAfterFiring = 0
+    tbl.ChargingTime = 0
+    tbl.ChargedShotEnabled = false
+    tbl.MinigunEnabled = false
+
+    -- Spread & Camera Recoil
+    tbl.Spread = 0
+    tbl.SpreadRedution = 0
+    tbl.CameraShakingEnabled = false
+
+    -- Ammo Limits
+    tbl.LimitedClipEnabled = false
+    tbl.AmmoPerClip = 999999
+    tbl.MaxClip = 999999
+end
+
+-- Locates runtime upvalues inside GunScript_Local
+local function findRuntimeTable(tool, gunScript)
+    if not debug_getupvalues then return nil end
+
+    -- Method 1: Check connections on Equipped/Unequipped
+    if getconnections then
+        for _, event in ipairs({tool.Equipped, tool.Unequipped}) do
+            for _, conn in ipairs(getconnections(event)) do
+                if conn.Function then
+                    local upvals = debug_getupvalues(conn.Function)
+                    for _, uv in pairs(upvals) do
+                        if type(uv) == "table" and uv.AmmoPerClip ~= nil then
+                            return uv
+                        elseif type(uv) == "function" then
+                            local subUpvals = debug_getupvalues(uv)
+                            for _, subUv in pairs(subUpvals) do
+                                if type(subUv) == "table" and subUv.AmmoPerClip ~= nil then
+                                    return subUv
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Method 2: Inspect script environment
+    if getsenv then
+        local success, env = pcall(getsenv, gunScript)
+        if success and env then
+            for _, fn in pairs(env) do
+                if type(fn) == "function" then
+                    local upvals = debug_getupvalues(fn)
+                    for _, uv in pairs(upvals) do
+                        if type(uv) == "table" and uv.AmmoPerClip ~= nil then
+                            return uv
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function processGun(tool)
     if not tool or not tool:IsA("Tool") then return end
 
-    -- Check if tool matches target name (unless target is set to "ALL")
-    if TARGET_GUN_NAME ~= "ALL" and tool.Name ~= TARGET_GUN_NAME then
-        return
+    local gunScript = tool:FindFirstChild("GunScript_Local")
+    local settingModule = tool:FindFirstChild("Setting")
+
+    if not gunScript then return end
+
+    print("🔍 Processing weapon:", tool.Name)
+
+    -- 1. Modify the Setting Module
+    local settingTable = nil
+    if settingModule and settingModule:IsA("ModuleScript") then
+        local success, res = pcall(require, settingModule)
+        if success and type(res) == "table" then
+            settingTable = res
+            applyGunMods(settingTable)
+        end
     end
 
-    local settingScript = tool:FindFirstChild("Setting") or tool:FindFirstChild("Settings")
+    -- 2. Modify the active server-sent upvalue (v5)
+    task.spawn(function()
+        local v5Table = nil
+        local attempts = 0
 
-    if settingScript and settingScript:IsA("ModuleScript") then
-        local success, config = pcall(require, settingScript)
+        -- Wait briefly until v5 is populated by SendInfo event
+        repeat
+            task.wait(0.1)
+            v5Table = findRuntimeTable(tool, gunScript)
+            attempts = attempts + 1
+        until v5Table ~= nil or attempts > 30
 
-        if success and type(config) == "table" then
-            -- 1. Infinite Ammo
-            if config.LimitedClipEnabled ~= nil then config.LimitedClipEnabled = false end
-            if config.AmmoPerClip ~= nil then config.AmmoPerClip = 999999 end
-            if config.MaxClip ~= nil then config.MaxClip = 999999 end
-            if config.Ammo ~= nil then config.Ammo = 999999 end
-
-            -- 2. Zero Spread
-            if config.Spread ~= nil then config.Spread = 0 end
-            if config.SpreadRedution ~= nil then config.SpreadRedution = 0 end
-            if config.MinSpread ~= nil then config.MinSpread = 0 end
-            if config.MaxSpread ~= nil then config.MaxSpread = 0 end
-
-            -- 3. Zero Recoil & No Camera Shake
-            if config.CameraShakingEnabled ~= nil then config.CameraShakingEnabled = false end
-            if config.Recoil ~= nil then config.Recoil = 0 end
-            if config.RecoilUp ~= nil then config.RecoilUp = 0 end
-            if config.RecoilLeft ~= nil then config.RecoilLeft = 0 end
-            if config.RecoilRight ~= nil then config.RecoilRight = 0 end
-
-            -- 4. Rapid Fire & Full Auto
-            if config.FireRate ~= nil then config.FireRate = 0 end
-            if config.Auto ~= nil then config.Auto = true end
-            if config.BurstFireEnabled ~= nil then config.BurstFireEnabled = false end
-            if config.DelayBeforeFiring ~= nil then config.DelayBeforeFiring = 0 end
-            if config.DelayAfterFiring ~= nil then config.DelayAfterFiring = 0 end
-
-            print("✅ Successfully modified weapon: " .. tool.Name)
+        if v5Table then
+            applyGunMods(v5Table)
+            print("✅ Successfully modified runtime stats & bypassed anti-cheat for:", tool.Name)
         else
-            warn("⚠️ Failed to require Setting module for: " .. tool.Name)
+            warn("⚠️ Could not reach runtime upvalue for:", tool.Name, "(Setting module updated)")
         end
-    end
+    end)
 end
 
--- Function to watch Backpack and Character containers
-local function scanAndHookContainer(container)
+-- Scan containers
+local function scanContainer(container)
     if not container then return end
-
-    -- Modify any existing tools immediately
-    for _, child in ipairs(container:GetChildren()) do
-        if child:IsA("Tool") then
-            modifyGun(child)
-        end
+    for _, item in ipairs(container:GetChildren()) do
+        processGun(item)
     end
-
-    -- Listen for newly added tools (equipped or picked up)
     container.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") then
-            task.wait(0.1) -- Brief pause to ensure internal instances load
-            modifyGun(child)
-        end
+        task.wait(0.1)
+        processGun(child)
     end)
 end
 
-local function initialize()
-    -- Hook current inventory
+-- Initialize listeners
+if LocalPlayer:FindFirstChild("Backpack") then
+    scanContainer(LocalPlayer.Backpack)
+end
+
+if LocalPlayer.Character then
+    scanContainer(LocalPlayer.Character)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    scanContainer(char)
     local backpack = LocalPlayer:WaitForChild("Backpack", 5)
-    if backpack then scanAndHookContainer(backpack) end
-
-    -- Hook current character model
-    if LocalPlayer.Character then
-        scanAndHookContainer(LocalPlayer.Character)
-    end
-
-    -- Handle respawns
-    LocalPlayer.CharacterAdded:Connect(function(char)
-        scanAndHookContainer(char)
-        local freshBackpack = LocalPlayer:WaitForChild("Backpack", 5)
-        if freshBackpack then
-            scanAndHookContainer(freshBackpack)
-        end
-    end)
-end
-
-initialize()
+    if backpack then scanContainer(backpack) end
+end)
