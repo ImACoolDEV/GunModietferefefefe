@@ -1,0 +1,97 @@
+--------------------------------------------------------------------------------
+-- ACS / GUN KIT AUTOMATIC MODIFIER
+--------------------------------------------------------------------------------
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- Set to your specific gun name, or "ALL" to modify every gun in inventory
+local TARGET_GUN_NAME = "TaurusJudge" 
+
+local function modifyGun(tool)
+    if not tool or not tool:IsA("Tool") then return end
+
+    -- Check if tool matches target name (unless target is set to "ALL")
+    if TARGET_GUN_NAME ~= "ALL" and tool.Name ~= TARGET_GUN_NAME then
+        return
+    end
+
+    local settingScript = tool:FindFirstChild("Setting") or tool:FindFirstChild("Settings")
+
+    if settingScript and settingScript:IsA("ModuleScript") then
+        local success, config = pcall(require, settingScript)
+
+        if success and type(config) == "table" then
+            -- 1. Infinite Ammo
+            if config.LimitedClipEnabled ~= nil then config.LimitedClipEnabled = false end
+            if config.AmmoPerClip ~= nil then config.AmmoPerClip = 999999 end
+            if config.MaxClip ~= nil then config.MaxClip = 999999 end
+            if config.Ammo ~= nil then config.Ammo = 999999 end
+
+            -- 2. Zero Spread
+            if config.Spread ~= nil then config.Spread = 0 end
+            if config.SpreadRedution ~= nil then config.SpreadRedution = 0 end
+            if config.MinSpread ~= nil then config.MinSpread = 0 end
+            if config.MaxSpread ~= nil then config.MaxSpread = 0 end
+
+            -- 3. Zero Recoil & No Camera Shake
+            if config.CameraShakingEnabled ~= nil then config.CameraShakingEnabled = false end
+            if config.Recoil ~= nil then config.Recoil = 0 end
+            if config.RecoilUp ~= nil then config.RecoilUp = 0 end
+            if config.RecoilLeft ~= nil then config.RecoilLeft = 0 end
+            if config.RecoilRight ~= nil then config.RecoilRight = 0 end
+
+            -- 4. Rapid Fire & Full Auto
+            if config.FireRate ~= nil then config.FireRate = 0 end
+            if config.Auto ~= nil then config.Auto = true end
+            if config.BurstFireEnabled ~= nil then config.BurstFireEnabled = false end
+            if config.DelayBeforeFiring ~= nil then config.DelayBeforeFiring = 0 end
+            if config.DelayAfterFiring ~= nil then config.DelayAfterFiring = 0 end
+
+            print("✅ Successfully modified weapon: " .. tool.Name)
+        else
+            warn("⚠️ Failed to require Setting module for: " .. tool.Name)
+        end
+    end
+end
+
+-- Function to watch Backpack and Character containers
+local function scanAndHookContainer(container)
+    if not container then return end
+
+    -- Modify any existing tools immediately
+    for _, child in ipairs(container:GetChildren()) do
+        if child:IsA("Tool") then
+            modifyGun(child)
+        end
+    end
+
+    -- Listen for newly added tools (equipped or picked up)
+    container.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") then
+            task.wait(0.1) -- Brief pause to ensure internal instances load
+            modifyGun(child)
+        end
+    end)
+end
+
+local function initialize()
+    -- Hook current inventory
+    local backpack = LocalPlayer:WaitForChild("Backpack", 5)
+    if backpack then scanAndHookContainer(backpack) end
+
+    -- Hook current character model
+    if LocalPlayer.Character then
+        scanAndHookContainer(LocalPlayer.Character)
+    end
+
+    -- Handle respawns
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        scanAndHookContainer(char)
+        local freshBackpack = LocalPlayer:WaitForChild("Backpack", 5)
+        if freshBackpack then
+            scanAndHookContainer(freshBackpack)
+        end
+    end)
+end
+
+initialize()
